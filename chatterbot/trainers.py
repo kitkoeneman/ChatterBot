@@ -209,6 +209,20 @@ class CustomCorpusTrainer(Trainer):
                 previous_statement_search_text = ''
 
                 for text in conversation:
+                    suggestion_tags = []
+                    if text.strip('.?!/;:\'\"') in constants.AFFIRMATIVES:
+                        text = 'AFF'
+                    elif text.strip('.?!/;:\'\"') in constants.NEGATIVES:
+                        text = 'NEG'
+                    elif text[0] is '^':
+                        (suggestion, text) = text.split(maxsplit=1)
+                        suggestion = suggestion[1:]
+                        if not suggestion.find('/'):
+                            suggestion_tags.append(suggestion)
+                        else:
+                            for suggestion in suggestion.split('/'):
+                                suggestion_tags.append(suggestion)
+
                     statement_search_text = self.chatbot.storage.tagger.get_bigram_pair_string(text)
 
                     statement = Statement(
@@ -218,12 +232,24 @@ class CustomCorpusTrainer(Trainer):
                         search_in_response_to=previous_statement_search_text,
                         conversation='training'
                     )
+
+                    # YesNoLogicAdapter deals with responses to AFF/NEG via statement tags.
+                    # No need for statements in_response_to = AFF/NEG   In fact, it was causing
+                    # erroneous responses
+                    if statement.in_response_to in ['AFF', 'NEG']:
+                        statement.in_response_to = None
+                        statement.search_in_response_to = None
+
                     statement.add_tags(*categories)
 
+                    if suggestion_tags:
+                        for suggestion in suggestion_tags:
+                            statement.add_tags('SUGGESTION:' + suggestion)
+
                     if previous_statement_text:
-                        if previous_statement_text.strip('.?!/;:\'\"') in constants.AFFIRMATIVES:
+                        if previous_statement_text == 'AFF':
                             statements_to_create[-2].add_tags('AFF:' + statement.text)
-                        elif previous_statement_text.strip('.?!/;:\'\"') in constants.NEGATIVES:
+                        elif previous_statement_text == 'NEG':
                             statements_to_create[-2].add_tags('NEG:' + statement.text)
 
                     statement = self.get_preprocessed_statement(statement)
@@ -232,7 +258,9 @@ class CustomCorpusTrainer(Trainer):
 
                     statements_to_create.append(statement)
 
-            self.chatbot.storage.create_many(statements_to_create)
+            # Using update() because create_many() makes duplicate statements. AFF/NEG tag data was lost on some.
+            for stmnts in statements_to_create:
+                self.chatbot.storage.update(stmnts)
 
 
 def read_file(files, queue, preprocessors, tagger):
